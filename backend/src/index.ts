@@ -10,6 +10,7 @@ import { repositoriesRouter } from './routes/repositories.js';
 import { pullRequestsRouter } from './routes/pullRequests.js';
 import { summariesRouter } from './routes/summaries.js';
 import { syncRouter } from './routes/sync.js';
+import { aiRouter } from './routes/ai.js';
 
 // Import middleware
 import { errorHandler } from './middleware/errorHandler.js';
@@ -57,6 +58,7 @@ app.use('/api/repositories', repositoriesRouter);
 app.use('/api/pull-requests', pullRequestsRouter);
 app.use('/api/summaries', summariesRouter);
 app.use('/api/sync', syncRouter);
+app.use('/api/ai', aiRouter);
 
 // 404 handler
 app.use('*', (req: Request, res: Response) => {

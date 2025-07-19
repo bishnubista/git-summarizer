@@ -1,250 +1,212 @@
 import { Router } from 'express';
 import type { Request, Response } from 'express';
 import { asyncHandler } from '../middleware/errorHandler.js';
+import { githubService } from '../services/github.js';
 import type { PullRequest, ApiResponse, FilterType } from '../types/index.js';
+import { logger } from '../utils/logger.js';
 
 const router = Router();
 
-// Mock data for pull requests (will be replaced with real GitHub API integration)
-const mockPullRequests: PullRequest[] = [
-    {
-        id: 'pr-1',
-        number: 12345,
-        title: 'feat: Add new concurrent features for React 19',
-        body: 'This PR introduces new concurrent features for React 19 including improved Suspense support and automatic batching...',
-        state: 'open',
-        author: {
-            login: 'gaearon',
-            id: 810438,
-            avatarUrl: 'https://avatars.githubusercontent.com/u/810438?v=4'
-        },
-        createdAt: '2024-01-15T14:30:00Z',
-        updatedAt: '2024-01-15T16:45:00Z',
-        changedFiles: 15,
-        additions: 342,
-        deletions: 128,
-        repository: {
-            id: '1',
-            name: 'react',
-            owner: 'facebook',
-            fullName: 'facebook/react',
-            description: 'The library for web and native user interfaces',
-            stargazersCount: 223000,
-            updatedAt: '2024-01-15T10:30:00Z',
-            gitUrl: 'git://github.com/facebook/react.git',
-            sshUrl: 'git@github.com:facebook/react.git',
-            language: 'JavaScript',
-            isPrivate: false,
-            enabled: true,
-            priority: 'high',
-            notificationChannels: ['email']
-        },
-        htmlUrl: 'https://github.com/facebook/react/pull/12345',
-        diffUrl: 'https://github.com/facebook/react/pull/12345.diff',
-        patchUrl: 'https://github.com/facebook/react/pull/12345.patch',
-        labels: [
-            { id: 1, name: 'enhancement', color: 'a2eeef', description: 'New feature or request' },
-            { id: 2, name: 'concurrent', color: 'ff6b6b', description: 'Related to concurrent features' }
-        ],
-        assignees: [],
-        reviewers: [],
-        commits: [],
-        baseBranch: 'main',
-        headBranch: 'feat/concurrent-features',
-        mergeable: true,
-        mergeableState: 'clean'
-    },
-    {
-        id: 'pr-2',
-        number: 23456,
-        title: 'fix: Resolve memory leak in TypeScript compiler',
-        body: 'This PR fixes a memory leak that occurs during incremental compilation...',
-        state: 'open',
-        author: {
-            login: 'sandersn',
-            id: 823403,
-            avatarUrl: 'https://avatars.githubusercontent.com/u/823403?v=4'
-        },
-        createdAt: '2024-01-14T09:15:00Z',
-        updatedAt: '2024-01-15T11:20:00Z',
-        changedFiles: 8,
-        additions: 156,
-        deletions: 89,
-        repository: {
-            id: '2',
-            name: 'typescript',
-            owner: 'microsoft',
-            fullName: 'microsoft/typescript',
-            description: 'TypeScript is a superset of JavaScript that compiles to clean JavaScript output',
-            stargazersCount: 98000,
-            updatedAt: '2024-01-14T15:20:00Z',
-            gitUrl: 'git://github.com/microsoft/typescript.git',
-            sshUrl: 'git@github.com:microsoft/typescript.git',
-            language: 'TypeScript',
-            isPrivate: false,
-            enabled: true,
-            priority: 'medium',
-            notificationChannels: ['email']
-        },
-        htmlUrl: 'https://github.com/microsoft/typescript/pull/23456',
-        diffUrl: 'https://github.com/microsoft/typescript/pull/23456.diff',
-        patchUrl: 'https://github.com/microsoft/typescript/pull/23456.patch',
-        labels: [
-            { id: 3, name: 'bug', color: 'd73a49', description: 'Something isn\'t working' },
-            { id: 4, name: 'compiler', color: 'fef2c0', description: 'Related to the TypeScript compiler' }
-        ],
-        assignees: [],
-        reviewers: [],
-        commits: [],
-        baseBranch: 'main',
-        headBranch: 'fix/memory-leak',
-        mergeable: true,
-        mergeableState: 'clean'
-    },
-    {
-        id: 'pr-3',
-        number: 34567,
-        title: 'feat: Add container query support to Tailwind CSS',
-        body: 'This PR adds support for CSS container queries with @container variants...',
-        state: 'open',
-        author: {
-            login: 'adamwathan',
-            id: 4323180,
-            avatarUrl: 'https://avatars.githubusercontent.com/u/4323180?v=4'
-        },
-        createdAt: '2024-01-13T16:45:00Z',
-        updatedAt: '2024-01-14T08:30:00Z',
-        changedFiles: 12,
-        additions: 289,
-        deletions: 45,
-        repository: {
-            id: '3',
-            name: 'tailwindcss',
-            owner: 'tailwindlabs',
-            fullName: 'tailwindlabs/tailwindcss',
-            description: 'A utility-first CSS framework for rapid UI development',
-            stargazersCount: 78000,
-            updatedAt: '2024-01-13T09:45:00Z',
-            gitUrl: 'git://github.com/tailwindlabs/tailwindcss.git',
-            sshUrl: 'git@github.com:tailwindlabs/tailwindcss.git',
-            language: 'JavaScript',
-            isPrivate: false,
-            enabled: true,
-            priority: 'medium',
-            notificationChannels: ['email']
-        },
-        htmlUrl: 'https://github.com/tailwindlabs/tailwindcss/pull/34567',
-        diffUrl: 'https://github.com/tailwindlabs/tailwindcss/pull/34567.diff',
-        patchUrl: 'https://github.com/tailwindlabs/tailwindcss/pull/34567.patch',
-        labels: [
-            { id: 5, name: 'enhancement', color: 'a2eeef', description: 'New feature or request' },
-            { id: 6, name: 'css', color: '1d76db', description: 'CSS related changes' }
-        ],
-        assignees: [],
-        reviewers: [],
-        commits: [],
-        baseBranch: 'master',
-        headBranch: 'feat/container-queries',
-        mergeable: true,
-        mergeableState: 'clean'
-    }
-];
-
 // GET /api/pull-requests - Fetch pull requests with optional filtering
-router.get('/', asyncHandler(async (req: Request, res: Response) => {
-    const {
-        repository,
-        state,
-        author,
-        page = '1',
-        limit = '20'
-    } = req.query;
+router.get('/', asyncHandler(async (req: Request, res: Response): Promise<void> => {
+    try {
+        const {
+            repository,
+            state,
+            author,
+            page = '1',
+            limit = '20'
+        } = req.query;
 
-    let filteredPRs = [...mockPullRequests];
+        const pageNum = parseInt(page as string, 10);
+        const limitNum = parseInt(limit as string, 10);
 
-    // Filter by repository
-    if (repository && typeof repository === 'string') {
-        filteredPRs = filteredPRs.filter(pr => pr.repository.id === repository);
-    }
+        logger.info(`Fetching pull requests - page: ${pageNum}, limit: ${limitNum}`);
 
-    // Filter by state
-    if (state && typeof state === 'string') {
-        filteredPRs = filteredPRs.filter(pr => pr.state === state);
-    }
+        if (repository && typeof repository === 'string') {
+            // Get PRs for a specific repository
+            const [owner, repo] = repository.split('/');
+            if (!owner || !repo) {
+                res.status(400).json({
+                    success: false,
+                    error: 'Invalid repository format. Use "owner/repo"'
+                });
+                return;
+            }
 
-    // Filter by author
-    if (author && typeof author === 'string') {
-        filteredPRs = filteredPRs.filter(pr => pr.author.login === author);
-    }
+            const { pullRequests, hasNext } = await githubService.getRepositoryPullRequests(
+                owner,
+                repo,
+                {
+                    state: state as any || 'open',
+                    page: pageNum,
+                    perPage: limitNum
+                }
+            );
 
-    // Pagination
-    const pageNum = parseInt(page as string, 10);
-    const limitNum = parseInt(limit as string, 10);
-    const startIndex = (pageNum - 1) * limitNum;
-    const endIndex = startIndex + limitNum;
-    const paginatedPRs = filteredPRs.slice(startIndex, endIndex);
+            let filteredPRs = pullRequests;
 
-    const response: ApiResponse<PullRequest[]> = {
-        success: true,
-        data: paginatedPRs,
-        meta: {
-            total: filteredPRs.length,
-            page: pageNum,
-            limit: limitNum,
-            hasNext: endIndex < filteredPRs.length
+            // Filter by author if specified
+            if (author && typeof author === 'string') {
+                filteredPRs = filteredPRs.filter(pr => pr.author.login === author);
+            }
+
+            const response: ApiResponse<PullRequest[]> = {
+                success: true,
+                data: filteredPRs,
+                meta: {
+                    total: filteredPRs.length,
+                    page: pageNum,
+                    limit: limitNum,
+                    hasNext: hasNext && filteredPRs.length === limitNum
+                }
+            };
+
+            res.json(response);
+        } else {
+            // Get PRs from all starred repositories
+            const { pullRequests } = await githubService.getAllPullRequestsFromStarredRepos({
+                maxRepos: 10, // Limit for performance
+                maxPRsPerRepo: 5,
+                prState: state as any || 'open'
+            });
+
+            let filteredPRs = pullRequests;
+
+            // Filter by author if specified
+            if (author && typeof author === 'string') {
+                filteredPRs = filteredPRs.filter(pr => pr.author.login === author);
+            }
+
+            // Apply pagination
+            const startIndex = (pageNum - 1) * limitNum;
+            const endIndex = startIndex + limitNum;
+            const paginatedPRs = filteredPRs.slice(startIndex, endIndex);
+
+            const response: ApiResponse<PullRequest[]> = {
+                success: true,
+                data: paginatedPRs,
+                meta: {
+                    total: filteredPRs.length,
+                    page: pageNum,
+                    limit: limitNum,
+                    hasNext: endIndex < filteredPRs.length
+                }
+            };
+
+            res.json(response);
         }
-    };
-
-    res.json(response);
+    } catch (error: any) {
+        logger.error('Failed to fetch pull requests:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Failed to fetch pull requests',
+            message: error.message
+        });
+    }
 }));
 
 // GET /api/pull-requests/:id - Fetch specific pull request
-router.get('/:id', asyncHandler(async (req: Request, res: Response) => {
-    const { id } = req.params;
+router.get('/:id', asyncHandler(async (req: Request, res: Response): Promise<void> => {
+    try {
+        const { id } = req.params;
 
-    const pullRequest = mockPullRequests.find(pr => pr.id === id);
+        // For now, we'll get all PRs and find the matching one
+        // In a real implementation with database, we'd store the mapping
+        const { pullRequests } = await githubService.getAllPullRequestsFromStarredRepos({
+            maxRepos: 20,
+            maxPRsPerRepo: 10
+        });
 
-    if (!pullRequest) {
-        return res.status(404).json({
+        const pullRequest = pullRequests.find(pr => pr.id === id);
+
+        if (!pullRequest) {
+            res.status(404).json({
+                success: false,
+                error: 'Pull request not found'
+            });
+            return;
+        }
+
+        // Get detailed information for this PR
+        try {
+            const { pullRequest: detailedPR, commits, files } = await githubService.getPullRequestDetails(
+                pullRequest.repository.owner,
+                pullRequest.repository.name,
+                pullRequest.number
+            );
+
+            // Add commits to the PR object
+            detailedPR.commits = commits;
+
+            const response: ApiResponse<PullRequest> = {
+                success: true,
+                data: detailedPR
+            };
+
+            res.json(response);
+        } catch (detailError) {
+            // If we can't get details, return the basic PR info
+            logger.warn(`Could not fetch detailed info for PR ${id}:`, detailError);
+
+            const response: ApiResponse<PullRequest> = {
+                success: true,
+                data: pullRequest
+            };
+
+            res.json(response);
+        }
+    } catch (error: any) {
+        logger.error(`Failed to fetch pull request ${req.params.id}:`, error);
+        res.status(500).json({
             success: false,
-            error: 'Pull request not found'
+            error: 'Failed to fetch pull request',
+            message: error.message
         });
     }
-
-    const response: ApiResponse<PullRequest> = {
-        success: true,
-        data: pullRequest
-    };
-
-    res.json(response);
 }));
 
-// GET /api/pull-requests/repository/:repoId - Fetch pull requests for specific repository
-router.get('/repository/:repoId', asyncHandler(async (req: Request, res: Response) => {
-    const { repoId } = req.params;
-    const { page = '1', limit = '20' } = req.query;
+// GET /api/pull-requests/repository/:owner/:repo - Fetch pull requests for specific repository
+router.get('/repository/:owner/:repo', asyncHandler(async (req: Request, res: Response): Promise<void> => {
+    try {
+        const { owner, repo } = req.params;
+        const { page = '1', limit = '20', state = 'open' } = req.query;
 
-    const filteredPRs = mockPullRequests.filter(pr => pr.repository.id === repoId);
+        const pageNum = parseInt(page as string, 10);
+        const limitNum = parseInt(limit as string, 10);
 
-    // Pagination
-    const pageNum = parseInt(page as string, 10);
-    const limitNum = parseInt(limit as string, 10);
-    const startIndex = (pageNum - 1) * limitNum;
-    const endIndex = startIndex + limitNum;
-    const paginatedPRs = filteredPRs.slice(startIndex, endIndex);
+        logger.info(`Fetching pull requests for ${owner}/${repo}`);
 
-    const response: ApiResponse<PullRequest[]> = {
-        success: true,
-        data: paginatedPRs,
-        meta: {
-            total: filteredPRs.length,
-            page: pageNum,
-            limit: limitNum,
-            hasNext: endIndex < filteredPRs.length
-        }
-    };
+        const { pullRequests, hasNext } = await githubService.getRepositoryPullRequests(
+            owner,
+            repo,
+            {
+                state: state as any,
+                page: pageNum,
+                perPage: limitNum
+            }
+        );
 
-    res.json(response);
+        const response: ApiResponse<PullRequest[]> = {
+            success: true,
+            data: pullRequests,
+            meta: {
+                total: pullRequests.length,
+                page: pageNum,
+                limit: limitNum,
+                hasNext
+            }
+        };
+
+        res.json(response);
+    } catch (error: any) {
+        logger.error(`Failed to fetch pull requests for ${req.params.owner}/${req.params.repo}:`, error);
+        res.status(500).json({
+            success: false,
+            error: 'Failed to fetch pull requests',
+            message: error.message
+        });
+    }
 }));
 
 export { router as pullRequestsRouter }; 

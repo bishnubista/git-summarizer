@@ -2,12 +2,13 @@ import { Router } from 'express';
 import type { Request, Response } from 'express';
 import { asyncHandler } from '../middleware/errorHandler.js';
 import { heavyOperationLimiter } from '../middleware/rateLimiter.js';
+import { githubService } from '../services/github.js';
 import type { ApiResponse, SyncResult } from '../types/index.js';
 import { logger } from '../utils/logger.js';
 
 const router = Router();
 
-// Mock sync status (will be replaced with real sync service)
+// Real sync status (replaced simulation)
 let currentSyncStatus: {
     isRunning: boolean;
     startedAt: Date | null;
@@ -16,6 +17,7 @@ let currentSyncStatus: {
         pullRequestsFound: number;
         summariesGenerated: number;
         currentRepository?: string;
+        totalRepositories?: number;
     };
 } = {
     isRunning: false,
@@ -27,30 +29,11 @@ let currentSyncStatus: {
     }
 };
 
-// Mock sync history
-const syncHistory: SyncResult[] = [
-    {
-        repositoriesChecked: 4,
-        newPRsFound: 3,
-        summariesGenerated: 3,
-        errors: [],
-        duration: 45000, // 45 seconds
-        startedAt: new Date('2024-01-15T08:00:00Z'),
-        completedAt: new Date('2024-01-15T08:00:45Z')
-    },
-    {
-        repositoriesChecked: 4,
-        newPRsFound: 1,
-        summariesGenerated: 1,
-        errors: ['Rate limit exceeded for microsoft/typescript'],
-        duration: 32000, // 32 seconds
-        startedAt: new Date('2024-01-14T08:00:00Z'),
-        completedAt: new Date('2024-01-14T08:00:32Z')
-    }
-];
+// Sync history
+const syncHistory: SyncResult[] = [];
 
-// Simulate sync process
-async function simulateSync(): Promise<SyncResult> {
+// Real sync process
+async function performRealSync(): Promise<SyncResult> {
     const startedAt = new Date();
     currentSyncStatus.isRunning = true;
     currentSyncStatus.startedAt = startedAt;
@@ -60,104 +43,187 @@ async function simulateSync(): Promise<SyncResult> {
         summariesGenerated: 0
     };
 
-    logger.info('Starting repository sync simulation');
+    const errors: string[] = [];
 
-    // Simulate checking repositories
-    const repositories = ['facebook/react', 'microsoft/typescript', 'tailwindlabs/tailwindcss', 'vercel/next.js'];
+    try {
+        logger.info('Starting real GitHub synchronization');
 
-    for (const repo of repositories) {
-        // Simulate processing time
-        await new Promise(resolve => setTimeout(resolve, Math.random() * 2000 + 1000));
+        // First, get starred repositories
+        const { repositories } = await githubService.getStarredRepositories({
+            perPage: 20 // Limit for sync
+        });
 
-        currentSyncStatus.progress.repositoriesChecked++;
-        currentSyncStatus.progress.currentRepository = repo;
+        currentSyncStatus.progress.totalRepositories = repositories.length;
+        logger.info(`Found ${repositories.length} starred repositories`);
 
-        // Randomly find PRs (0-2 per repo)
-        const newPRs = Math.floor(Math.random() * 3);
-        currentSyncStatus.progress.pullRequestsFound += newPRs;
-        currentSyncStatus.progress.summariesGenerated += newPRs;
+        let totalPullRequests = 0;
 
-        logger.info(`Processed ${repo}: found ${newPRs} new PRs`);
+        // Process each repository
+        for (const repository of repositories) {
+            try {
+                currentSyncStatus.progress.currentRepository = repository.fullName;
+                logger.info(`Processing repository: ${repository.fullName}`);
+
+                // Get pull requests for this repository
+                const { pullRequests } = await githubService.getRepositoryPullRequests(
+                    repository.owner,
+                    repository.name,
+                    {
+                        state: 'open',
+                        perPage: 5 // Limit PRs per repo for sync
+                    }
+                );
+
+                totalPullRequests += pullRequests.length;
+                currentSyncStatus.progress.repositoriesChecked++;
+                currentSyncStatus.progress.pullRequestsFound = totalPullRequests;
+
+                logger.info(`Found ${pullRequests.length} PRs in ${repository.fullName}`);
+
+                // Small delay to be respectful to GitHub's API
+                await new Promise(resolve => setTimeout(resolve, 200));
+
+            } catch (repoError: any) {
+                const errorMsg = `Failed to sync ${repository.fullName}: ${repoError.message}`;
+                logger.warn(errorMsg);
+                errors.push(errorMsg);
+
+                // Continue with other repositories
+                currentSyncStatus.progress.repositoriesChecked++;
+            }
+        }
+
+        const completedAt = new Date();
+        const result: SyncResult = {
+            repositoriesChecked: currentSyncStatus.progress.repositoriesChecked,
+            newPRsFound: totalPullRequests,
+            summariesGenerated: 0, // Will be updated when LLM integration is added
+            errors,
+            duration: completedAt.getTime() - startedAt.getTime(),
+            startedAt,
+            completedAt
+        };
+
+        // Reset sync status
+        currentSyncStatus.isRunning = false;
+        currentSyncStatus.startedAt = null;
+
+        // Add to history
+        syncHistory.unshift(result);
+
+        // Keep only last 10 sync results
+        if (syncHistory.length > 10) {
+            syncHistory.pop();
+        }
+
+        logger.info('GitHub synchronization completed', {
+            repositoriesChecked: result.repositoriesChecked,
+            newPRsFound: result.newPRsFound,
+            errors: result.errors.length,
+            duration: result.duration
+        });
+
+        return result;
+
+    } catch (error: any) {
+        currentSyncStatus.isRunning = false;
+        currentSyncStatus.startedAt = null;
+
+        logger.error('GitHub synchronization failed:', error);
+        throw error;
     }
-
-    const completedAt = new Date();
-    const result: SyncResult = {
-        repositoriesChecked: repositories.length,
-        newPRsFound: currentSyncStatus.progress.pullRequestsFound,
-        summariesGenerated: currentSyncStatus.progress.summariesGenerated,
-        errors: [],
-        duration: completedAt.getTime() - startedAt.getTime(),
-        startedAt,
-        completedAt
-    };
-
-    // Reset sync status
-    currentSyncStatus.isRunning = false;
-    currentSyncStatus.startedAt = null;
-
-    // Add to history
-    syncHistory.unshift(result);
-
-    // Keep only last 10 sync results
-    if (syncHistory.length > 10) {
-        syncHistory.pop();
-    }
-
-    logger.info('Repository sync completed', result);
-    return result;
 }
 
 // POST /api/sync - Trigger manual synchronization
-router.post('/', heavyOperationLimiter, asyncHandler(async (req: Request, res: Response) => {
+router.post('/', heavyOperationLimiter, asyncHandler(async (req: Request, res: Response): Promise<void> => {
     if (currentSyncStatus.isRunning) {
-        return res.status(409).json({
+        res.status(409).json({
             success: false,
             error: 'Sync already in progress',
             message: 'A synchronization process is already running. Please wait for it to complete.'
         });
+        return;
     }
 
-    // Start sync process asynchronously
-    simulateSync()
-        .then((result) => {
-            logger.info('Sync completed successfully', result);
-        })
-        .catch((error) => {
-            logger.error('Sync failed', error);
-            currentSyncStatus.isRunning = false;
-            currentSyncStatus.startedAt = null;
-        });
-
-    const response: ApiResponse<any> = {
-        success: true,
-        message: 'Synchronization started',
-        data: {
-            status: 'started',
-            startedAt: currentSyncStatus.startedAt,
-            message: 'Sync process has been initiated. Use GET /api/sync/status to monitor progress.'
+    try {
+        // Validate GitHub token first
+        const isTokenValid = await githubService.validateToken();
+        if (!isTokenValid) {
+            res.status(401).json({
+                success: false,
+                error: 'GitHub authentication failed',
+                message: 'Please check your GitHub token configuration.'
+            });
+            return;
         }
-    };
 
-    res.status(202).json(response); // 202 Accepted
+        // Start sync process asynchronously
+        performRealSync()
+            .then((result) => {
+                logger.info('Sync completed successfully', result);
+            })
+            .catch((error) => {
+                logger.error('Sync failed', error);
+                currentSyncStatus.isRunning = false;
+                currentSyncStatus.startedAt = null;
+            });
+
+        const response: ApiResponse<any> = {
+            success: true,
+            message: 'Synchronization started',
+            data: {
+                status: 'started',
+                startedAt: currentSyncStatus.startedAt,
+                message: 'Real GitHub sync process has been initiated. Use GET /api/sync/status to monitor progress.'
+            }
+        };
+
+        res.status(202).json(response); // 202 Accepted
+    } catch (error: any) {
+        logger.error('Failed to start sync:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Failed to start sync',
+            message: error.message
+        });
+    }
 }));
 
 // GET /api/sync/status - Get current sync status
-router.get('/status', asyncHandler(async (req: Request, res: Response) => {
-    const response: ApiResponse<any> = {
-        success: true,
-        data: {
-            isRunning: currentSyncStatus.isRunning,
-            startedAt: currentSyncStatus.startedAt,
-            progress: currentSyncStatus.progress,
-            lastSync: syncHistory.length > 0 ? syncHistory[0] : null
+router.get('/status', asyncHandler(async (req: Request, res: Response): Promise<void> => {
+    try {
+        // Also get current rate limit status
+        let rateLimitInfo = null;
+        try {
+            rateLimitInfo = await githubService.getRateLimitStatus();
+        } catch (error) {
+            logger.warn('Could not fetch rate limit status:', error);
         }
-    };
 
-    res.json(response);
+        const response: ApiResponse<any> = {
+            success: true,
+            data: {
+                isRunning: currentSyncStatus.isRunning,
+                startedAt: currentSyncStatus.startedAt,
+                progress: currentSyncStatus.progress,
+                lastSync: syncHistory.length > 0 ? syncHistory[0] : null,
+                rateLimit: rateLimitInfo
+            }
+        };
+
+        res.json(response);
+    } catch (error: any) {
+        logger.error('Failed to get sync status:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Failed to get sync status',
+            message: error.message
+        });
+    }
 }));
 
 // GET /api/sync/history - Get sync history
-router.get('/history', asyncHandler(async (req: Request, res: Response) => {
+router.get('/history', asyncHandler(async (req: Request, res: Response): Promise<void> => {
     const { page = '1', limit = '10' } = req.query;
 
     const pageNum = parseInt(page as string, 10);
@@ -181,52 +247,70 @@ router.get('/history', asyncHandler(async (req: Request, res: Response) => {
 }));
 
 // GET /api/sync/stats - Get sync statistics
-router.get('/stats', asyncHandler(async (req: Request, res: Response) => {
-    const totalSyncs = syncHistory.length;
-    const successfulSyncs = syncHistory.filter(sync => sync.errors.length === 0).length;
-    const failedSyncs = totalSyncs - successfulSyncs;
+router.get('/stats', asyncHandler(async (req: Request, res: Response): Promise<void> => {
+    try {
+        const totalSyncs = syncHistory.length;
+        const successfulSyncs = syncHistory.filter(sync => sync.errors.length === 0).length;
+        const failedSyncs = totalSyncs - successfulSyncs;
 
-    const totalRepositoriesChecked = syncHistory.reduce((acc, sync) => acc + sync.repositoriesChecked, 0);
-    const totalPRsFound = syncHistory.reduce((acc, sync) => acc + sync.newPRsFound, 0);
-    const totalSummariesGenerated = syncHistory.reduce((acc, sync) => acc + sync.summariesGenerated, 0);
+        const totalRepositoriesChecked = syncHistory.reduce((acc, sync) => acc + sync.repositoriesChecked, 0);
+        const totalPRsFound = syncHistory.reduce((acc, sync) => acc + sync.newPRsFound, 0);
+        const totalSummariesGenerated = syncHistory.reduce((acc, sync) => acc + sync.summariesGenerated, 0);
 
-    const averageDuration = totalSyncs > 0
-        ? syncHistory.reduce((acc, sync) => acc + sync.duration, 0) / totalSyncs
-        : 0;
+        const averageDuration = totalSyncs > 0
+            ? syncHistory.reduce((acc, sync) => acc + sync.duration, 0) / totalSyncs
+            : 0;
 
-    const lastSync = syncHistory.length > 0 ? syncHistory[0] : null;
+        const lastSync = syncHistory.length > 0 ? syncHistory[0] : null;
 
-    const response: ApiResponse<any> = {
-        success: true,
-        data: {
-            totalSyncs,
-            successfulSyncs,
-            failedSyncs,
-            successRate: totalSyncs > 0 ? (successfulSyncs / totalSyncs) * 100 : 0,
-            totalRepositoriesChecked,
-            totalPRsFound,
-            totalSummariesGenerated,
-            averageDuration: Math.round(averageDuration),
-            lastSync,
-            isCurrentlyRunning: currentSyncStatus.isRunning
+        // Get current GitHub rate limit status
+        let rateLimitInfo = null;
+        try {
+            rateLimitInfo = await githubService.getRateLimitStatus();
+        } catch (error) {
+            logger.warn('Could not fetch rate limit status for stats:', error);
         }
-    };
 
-    res.json(response);
+        const response: ApiResponse<any> = {
+            success: true,
+            data: {
+                totalSyncs,
+                successfulSyncs,
+                failedSyncs,
+                successRate: totalSyncs > 0 ? (successfulSyncs / totalSyncs) * 100 : 0,
+                totalRepositoriesChecked,
+                totalPRsFound,
+                totalSummariesGenerated,
+                averageDuration: Math.round(averageDuration),
+                lastSync,
+                isCurrentlyRunning: currentSyncStatus.isRunning,
+                rateLimit: rateLimitInfo
+            }
+        };
+
+        res.json(response);
+    } catch (error: any) {
+        logger.error('Failed to get sync stats:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Failed to get sync stats',
+            message: error.message
+        });
+    }
 }));
 
 // DELETE /api/sync/cancel - Cancel running sync (if supported)
-router.delete('/cancel', asyncHandler(async (req: Request, res: Response) => {
+router.delete('/cancel', asyncHandler(async (req: Request, res: Response): Promise<void> => {
     if (!currentSyncStatus.isRunning) {
-        return res.status(400).json({
+        res.status(400).json({
             success: false,
             error: 'No sync in progress',
             message: 'There is no synchronization process currently running.'
         });
+        return;
     }
 
-    // In a real implementation, this would cancel the running sync process
-    // For now, we'll just reset the status
+    // Reset sync status (in a real implementation, this would also cancel ongoing requests)
     currentSyncStatus.isRunning = false;
     currentSyncStatus.startedAt = null;
     currentSyncStatus.progress = {

@@ -1,317 +1,357 @@
 import { Router } from 'express';
 import type { Request, Response } from 'express';
 import { asyncHandler } from '../middleware/errorHandler.js';
-import type { PRSummary, ApiResponse } from '../types/index.js';
+import { githubService } from '../services/github.js';
+import { aiService } from '../services/ai.js';
+import type { PRSummary, ApiResponse, FilterType } from '../types/index.js';
+import { logger } from '../utils/logger.js';
 
 const router = Router();
 
-// Mock data for PR summaries (will be replaced with database integration)
-const mockSummaries: PRSummary[] = [
-    {
-        id: 'summary-1',
-        prId: 'pr-1',
-        summary: `## Summary
-Introduces new concurrent features for React 19, including improved Suspense support and automatic batching for better performance.
+// In-memory storage for summaries (will be replaced with database)
+let summariesStore: PRSummary[] = [];
 
-## Key Changes
-- **Concurrent Rendering**: Enhanced concurrent rendering capabilities
-- **Suspense Improvements**: Better error boundaries and loading states
-- **Automatic Batching**: Reduces unnecessary re-renders
+// GET /api/summaries - Fetch all PR summaries with filtering
+router.get('/', asyncHandler(async (req: Request, res: Response): Promise<void> => {
+    try {
+        const {
+            repository,
+            author,
+            impact,
+            reviewed,
+            important,
+            page = '1',
+            limit = '20'
+        } = req.query;
 
-## Impact
-This significantly improves React's performance for complex applications with heavy async operations.`,
-        keyChanges: [
-            'Enhanced concurrent rendering',
-            'Improved Suspense support',
-            'Automatic batching implementation',
-            'Better error boundaries'
-        ],
-        impact: 'high',
-        isReviewed: false,
-        isImportant: true,
-        createdAt: '2024-01-15T17:00:00Z',
-        riskFactors: [
-            'Breaking changes in concurrent behavior',
-            'Potential performance regressions in edge cases'
-        ],
-        estimatedReviewTime: 45,
-        changeCategories: ['feature', 'performance'],
-        llmProvider: 'openai',
-        tokenUsage: {
-            promptTokens: 1200,
-            completionTokens: 350,
-            totalTokens: 1550,
-            cost: 0.0031
-        },
-        confidence: 0.92
-    },
-    {
-        id: 'summary-2',
-        prId: 'pr-2',
-        summary: `## Summary
-Fixes a critical memory leak in the TypeScript compiler that occurs during incremental compilation, particularly affecting large codebases.
+        const pageNum = parseInt(page as string, 10);
+        const limitNum = parseInt(limit as string, 10);
 
-## Key Changes
-- **Memory Management**: Fixed memory cleanup in incremental compilation
-- **Garbage Collection**: Improved GC efficiency for large projects
-- **Performance**: Reduced memory usage by ~30%
+        logger.info(`Fetching summaries - page: ${pageNum}, limit: ${limitNum}`);
 
-## Impact
-This resolves performance issues in large TypeScript projects and reduces build times.`,
-        keyChanges: [
-            'Fixed memory leak in compiler',
-            'Improved garbage collection',
-            'Optimized incremental compilation',
-            'Reduced memory usage by 30%'
-        ],
-        impact: 'medium',
-        isReviewed: true,
-        isImportant: false,
-        createdAt: '2024-01-15T12:00:00Z',
-        riskFactors: [
-            'Potential impact on compilation speed',
-            'Changes to internal compiler APIs'
-        ],
-        estimatedReviewTime: 30,
-        changeCategories: ['bugfix', 'performance'],
-        llmProvider: 'openai',
-        tokenUsage: {
-            promptTokens: 980,
-            completionTokens: 280,
-            totalTokens: 1260,
-            cost: 0.0025
-        },
-        confidence: 0.88
-    },
-    {
-        id: 'summary-3',
-        prId: 'pr-3',
-        summary: `## Summary
-Adds container query utilities to Tailwind CSS, enabling responsive design based on container dimensions rather than viewport size.
-
-## Key Changes
-- **Container Queries**: New @container variants for all utilities
-- **Configuration**: Added container configuration options
-- **Documentation**: Comprehensive examples and migration guide
-
-## Impact
-This enables more modular and reusable responsive components, particularly useful for component libraries and complex layouts.`,
-        keyChanges: [
-            'Container query support',
-            'New @container variants',
-            'Configuration options',
-            'Comprehensive documentation'
-        ],
-        impact: 'medium',
-        isReviewed: false,
-        isImportant: false,
-        createdAt: '2024-01-13T17:00:00Z',
-        riskFactors: [
-            'Browser compatibility concerns',
-            'Potential bundle size increase'
-        ],
-        estimatedReviewTime: 25,
-        changeCategories: ['feature'],
-        llmProvider: 'openai',
-        tokenUsage: {
-            promptTokens: 1100,
-            completionTokens: 320,
-            totalTokens: 1420,
-            cost: 0.0028
-        },
-        confidence: 0.85
-    }
-];
-
-// GET /api/summaries - Fetch all summaries with optional filtering
-router.get('/', asyncHandler(async (req: Request, res: Response) => {
-    const {
-        prId,
-        isReviewed,
-        isImportant,
-        impact,
-        page = '1',
-        limit = '20'
-    } = req.query;
-
-    let filteredSummaries = [...mockSummaries];
-
-    // Filter by PR ID
-    if (prId && typeof prId === 'string') {
-        filteredSummaries = filteredSummaries.filter(summary => summary.prId === prId);
-    }
-
-    // Filter by review status
-    if (isReviewed !== undefined) {
-        const reviewedFilter = isReviewed === 'true';
-        filteredSummaries = filteredSummaries.filter(summary => summary.isReviewed === reviewedFilter);
-    }
-
-    // Filter by importance
-    if (isImportant !== undefined) {
-        const importantFilter = isImportant === 'true';
-        filteredSummaries = filteredSummaries.filter(summary => summary.isImportant === importantFilter);
-    }
-
-    // Filter by impact level
-    if (impact && typeof impact === 'string') {
-        filteredSummaries = filteredSummaries.filter(summary => summary.impact === impact);
-    }
-
-    // Pagination
-    const pageNum = parseInt(page as string, 10);
-    const limitNum = parseInt(limit as string, 10);
-    const startIndex = (pageNum - 1) * limitNum;
-    const endIndex = startIndex + limitNum;
-    const paginatedSummaries = filteredSummaries.slice(startIndex, endIndex);
-
-    const response: ApiResponse<PRSummary[]> = {
-        success: true,
-        data: paginatedSummaries,
-        meta: {
-            total: filteredSummaries.length,
-            page: pageNum,
-            limit: limitNum,
-            hasNext: endIndex < filteredSummaries.length
+        // If we don't have summaries yet, generate them from recent PRs
+        if (summariesStore.length === 0) {
+            await generateSummariesFromRecentPRs();
         }
-    };
 
-    res.json(response);
+        let filteredSummaries = [...summariesStore];
+
+        // Apply filters
+        if (repository && typeof repository === 'string') {
+            // Get PRs for the specific repository to match with summaries
+            const { pullRequests } = await githubService.getAllPullRequestsFromStarredRepos({ maxRepos: 50, maxPRsPerRepo: 10 });
+            const repoPRIds = pullRequests
+                .filter(pr => pr.repository.fullName === repository)
+                .map(pr => pr.id);
+            filteredSummaries = filteredSummaries.filter(summary => repoPRIds.includes(summary.prId));
+        }
+
+        if (author && typeof author === 'string') {
+            const { pullRequests } = await githubService.getAllPullRequestsFromStarredRepos({ maxRepos: 50, maxPRsPerRepo: 10 });
+            const authorPRIds = pullRequests
+                .filter(pr => pr.author.login === author)
+                .map(pr => pr.id);
+            filteredSummaries = filteredSummaries.filter(summary => authorPRIds.includes(summary.prId));
+        }
+
+        if (impact && typeof impact === 'string') {
+            filteredSummaries = filteredSummaries.filter(summary => summary.impact === impact);
+        }
+
+        if (reviewed !== undefined) {
+            const isReviewed = reviewed === 'true';
+            filteredSummaries = filteredSummaries.filter(summary => summary.isReviewed === isReviewed);
+        }
+
+        if (important !== undefined) {
+            const isImportant = important === 'true';
+            filteredSummaries = filteredSummaries.filter(summary => summary.isImportant === isImportant);
+        }
+
+        // Sort by creation date (newest first)
+        filteredSummaries.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+
+        // Apply pagination
+        const startIndex = (pageNum - 1) * limitNum;
+        const endIndex = startIndex + limitNum;
+        const paginatedSummaries = filteredSummaries.slice(startIndex, endIndex);
+
+        const response: ApiResponse<PRSummary[]> = {
+            success: true,
+            data: paginatedSummaries,
+            meta: {
+                total: filteredSummaries.length,
+                page: pageNum,
+                limit: limitNum,
+                hasNext: endIndex < filteredSummaries.length
+            }
+        };
+
+        res.json(response);
+    } catch (error: any) {
+        logger.error('Failed to fetch summaries:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Failed to fetch summaries',
+            message: error.message
+        });
+    }
 }));
 
 // GET /api/summaries/:id - Fetch specific summary
-router.get('/:id', asyncHandler(async (req: Request, res: Response) => {
-    const { id } = req.params;
+router.get('/:id', asyncHandler(async (req: Request, res: Response): Promise<void> => {
+    try {
+        const { id } = req.params;
 
-    const summary = mockSummaries.find(s => s.id === id);
+        const summary = summariesStore.find(s => s.id === id);
 
-    if (!summary) {
-        return res.status(404).json({
+        if (!summary) {
+            res.status(404).json({
+                success: false,
+                error: 'Summary not found'
+            });
+            return;
+        }
+
+        const response: ApiResponse<PRSummary> = {
+            success: true,
+            data: summary
+        };
+
+        res.json(response);
+    } catch (error: any) {
+        logger.error(`Failed to fetch summary ${req.params.id}:`, error);
+        res.status(500).json({
             success: false,
-            error: 'Summary not found'
+            error: 'Failed to fetch summary',
+            message: error.message
         });
     }
-
-    const response: ApiResponse<PRSummary> = {
-        success: true,
-        data: summary
-    };
-
-    res.json(response);
 }));
 
-// PATCH /api/summaries/:id/reviewed - Mark summary as reviewed/unreviewed
-router.patch('/:id/reviewed', asyncHandler(async (req: Request, res: Response) => {
-    const { id } = req.params;
-    const { isReviewed } = req.body;
+// PATCH /api/summaries/:id/reviewed - Toggle review status
+router.patch('/:id/reviewed', asyncHandler(async (req: Request, res: Response): Promise<void> => {
+    try {
+        const { id } = req.params;
 
-    const summaryIndex = mockSummaries.findIndex(s => s.id === id);
+        const summaryIndex = summariesStore.findIndex(s => s.id === id);
 
-    if (summaryIndex === -1) {
-        return res.status(404).json({
+        if (summaryIndex === -1) {
+            res.status(404).json({
+                success: false,
+                error: 'Summary not found'
+            });
+            return;
+        }
+
+        summariesStore[summaryIndex]!.isReviewed = !summariesStore[summaryIndex]!.isReviewed;
+
+        const response: ApiResponse<PRSummary> = {
+            success: true,
+            data: summariesStore[summaryIndex]!,
+            message: `Summary marked as ${summariesStore[summaryIndex]!.isReviewed ? 'reviewed' : 'unreviewed'}`
+        };
+
+        res.json(response);
+    } catch (error: any) {
+        logger.error(`Failed to update review status for summary ${req.params.id}:`, error);
+        res.status(500).json({
             success: false,
-            error: 'Summary not found'
+            error: 'Failed to update review status',
+            message: error.message
         });
     }
-
-    // Update review status
-    const existingSummary = mockSummaries[summaryIndex]!;
-    mockSummaries[summaryIndex] = {
-        ...existingSummary,
-        isReviewed: isReviewed !== undefined ? isReviewed : !existingSummary.isReviewed
-    };
-
-    const updatedSummary = mockSummaries[summaryIndex]!;
-
-    const response: ApiResponse<PRSummary> = {
-        success: true,
-        data: updatedSummary,
-        message: `Summary marked as ${updatedSummary.isReviewed ? 'reviewed' : 'unreviewed'}`
-    };
-
-    res.json(response);
 }));
 
-// PATCH /api/summaries/:id/important - Mark summary as important/unimportant
-router.patch('/:id/important', asyncHandler(async (req: Request, res: Response) => {
-    const { id } = req.params;
-    const { isImportant } = req.body;
+// PATCH /api/summaries/:id/important - Toggle importance status
+router.patch('/:id/important', asyncHandler(async (req: Request, res: Response): Promise<void> => {
+    try {
+        const { id } = req.params;
 
-    const summaryIndex = mockSummaries.findIndex(s => s.id === id);
+        const summaryIndex = summariesStore.findIndex(s => s.id === id);
 
-    if (summaryIndex === -1) {
-        return res.status(404).json({
+        if (summaryIndex === -1) {
+            res.status(404).json({
+                success: false,
+                error: 'Summary not found'
+            });
+            return;
+        }
+
+        summariesStore[summaryIndex]!.isImportant = !summariesStore[summaryIndex]!.isImportant;
+
+        const response: ApiResponse<PRSummary> = {
+            success: true,
+            data: summariesStore[summaryIndex]!,
+            message: `Summary marked as ${summariesStore[summaryIndex]!.isImportant ? 'important' : 'not important'}`
+        };
+
+        res.json(response);
+    } catch (error: any) {
+        logger.error(`Failed to update importance status for summary ${req.params.id}:`, error);
+        res.status(500).json({
             success: false,
-            error: 'Summary not found'
+            error: 'Failed to update importance status',
+            message: error.message
         });
     }
-
-    // Update importance status
-    const existingSummary = mockSummaries[summaryIndex]!;
-    mockSummaries[summaryIndex] = {
-        ...existingSummary,
-        isImportant: isImportant !== undefined ? isImportant : !existingSummary.isImportant
-    };
-
-    const updatedSummary = mockSummaries[summaryIndex]!;
-
-    const response: ApiResponse<PRSummary> = {
-        success: true,
-        data: updatedSummary,
-        message: `Summary marked as ${updatedSummary.isImportant ? 'important' : 'not important'}`
-    };
-
-    res.json(response);
 }));
 
-// GET /api/summaries/pr/:prId - Fetch summary for specific PR
-router.get('/pr/:prId', asyncHandler(async (req: Request, res: Response) => {
-    const { prId } = req.params;
+// POST /api/summaries/generate - Generate summaries for recent PRs
+router.post('/generate', asyncHandler(async (req: Request, res: Response): Promise<void> => {
+    try {
+        const { force = false, maxPRs = 10 } = req.body;
 
-    const summary = mockSummaries.find(s => s.prId === prId);
+        logger.info(`Generating summaries for up to ${maxPRs} recent PRs (force: ${force})`);
 
-    if (!summary) {
-        return res.status(404).json({
+        // Warn if AI service is not available but continue with fallback summaries
+        if (!aiService.isAvailable()) {
+            logger.warn('No LLM providers configured. Will generate fallback summaries.');
+        }
+
+        // Get recent pull requests
+        const { pullRequests } = await githubService.getAllPullRequestsFromStarredRepos({
+            maxRepos: 10,
+            maxPRsPerRepo: Math.ceil(maxPRs / 10)
+        });
+
+        // Filter PRs that don't already have summaries (unless force is true)
+        const existingSummaryPRIds = new Set(summariesStore.map(s => s.prId));
+        const prsToSummarize = force
+            ? pullRequests.slice(0, maxPRs)
+            : pullRequests.filter(pr => !existingSummaryPRIds.has(pr.id)).slice(0, maxPRs);
+
+        if (prsToSummarize.length === 0) {
+            res.json({
+                success: true,
+                message: 'No new PRs to summarize',
+                data: {
+                    generated: 0,
+                    skipped: pullRequests.length,
+                    total: summariesStore.length
+                }
+            });
+            return;
+        }
+
+        logger.info(`Generating summaries for ${prsToSummarize.length} PRs`);
+
+        // Generate summaries using AI service
+        const newSummaries = await aiService.generateBatchSummaries(prsToSummarize);
+
+        // Remove old summaries for the same PRs if force is true
+        if (force) {
+            const prIdsToReplace = new Set(prsToSummarize.map(pr => pr.id));
+            summariesStore = summariesStore.filter(s => !prIdsToReplace.has(s.prId));
+        }
+
+        // Add new summaries to store
+        summariesStore.push(...newSummaries);
+
+        // Sort summaries by creation date (newest first)
+        summariesStore.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+
+        const response: ApiResponse<any> = {
+            success: true,
+            message: `Generated ${newSummaries.length} new summaries`,
+            data: {
+                generated: newSummaries.length,
+                skipped: pullRequests.length - prsToSummarize.length,
+                total: summariesStore.length,
+                summaries: newSummaries.slice(0, 5) // Return first 5 summaries
+            }
+        };
+
+        res.json(response);
+    } catch (error: any) {
+        logger.error('Failed to generate summaries:', error);
+        res.status(500).json({
             success: false,
-            error: 'Summary not found for this pull request'
+            error: 'Failed to generate summaries',
+            message: error.message
         });
     }
-
-    const response: ApiResponse<PRSummary> = {
-        success: true,
-        data: summary
-    };
-
-    res.json(response);
 }));
 
 // GET /api/summaries/stats - Get summary statistics
-router.get('/stats', asyncHandler(async (req: Request, res: Response) => {
-    const totalSummaries = mockSummaries.length;
-    const reviewedSummaries = mockSummaries.filter(s => s.isReviewed).length;
-    const importantSummaries = mockSummaries.filter(s => s.isImportant).length;
-    const unreviewedSummaries = totalSummaries - reviewedSummaries;
+router.get('/stats', asyncHandler(async (req: Request, res: Response): Promise<void> => {
+    try {
+        const totalSummaries = summariesStore.length;
+        const reviewedSummaries = summariesStore.filter(s => s.isReviewed).length;
+        const importantSummaries = summariesStore.filter(s => s.isImportant).length;
 
-    const impactDistribution = {
-        high: mockSummaries.filter(s => s.impact === 'high').length,
-        medium: mockSummaries.filter(s => s.impact === 'medium').length,
-        low: mockSummaries.filter(s => s.impact === 'low').length
-    };
+        const impactDistribution = {
+            high: summariesStore.filter(s => s.impact === 'high').length,
+            medium: summariesStore.filter(s => s.impact === 'medium').length,
+            low: summariesStore.filter(s => s.impact === 'low').length
+        };
 
-    const response: ApiResponse<any> = {
-        success: true,
-        data: {
-            total: totalSummaries,
-            reviewed: reviewedSummaries,
-            unreviewed: unreviewedSummaries,
-            important: importantSummaries,
-            impactDistribution,
-            averageConfidence: mockSummaries.reduce((acc, s) => acc + s.confidence, 0) / totalSummaries,
-            totalCost: mockSummaries.reduce((acc, s) => acc + s.tokenUsage.cost, 0)
-        }
-    };
+        const providerDistribution = summariesStore.reduce((acc, summary) => {
+            const provider = summary.aiProvider || 'unknown';
+            acc[provider] = (acc[provider] || 0) + 1;
+            return acc;
+        }, {} as Record<string, number>);
 
-    res.json(response);
+        const avgConfidence = summariesStore.length > 0
+            ? summariesStore.reduce((sum, s) => sum + (s.confidence || 0), 0) / summariesStore.length
+            : 0;
+
+        const response: ApiResponse<any> = {
+            success: true,
+            data: {
+                totalSummaries,
+                reviewedSummaries,
+                importantSummaries,
+                reviewedPercentage: totalSummaries > 0 ? (reviewedSummaries / totalSummaries) * 100 : 0,
+                impactDistribution,
+                providerDistribution,
+                averageConfidence: Math.round(avgConfidence * 100) / 100,
+                availableProviders: aiService.getAvailableProviders(),
+                aiServiceAvailable: aiService.isAvailable()
+            }
+        };
+
+        res.json(response);
+    } catch (error: any) {
+        logger.error('Failed to get summary stats:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Failed to get summary stats',
+            message: error.message
+        });
+    }
 }));
+
+/**
+ * Helper function to generate summaries from recent PRs on startup
+ */
+async function generateSummariesFromRecentPRs(): Promise<void> {
+    try {
+        if (!aiService.isAvailable()) {
+            logger.warn('AI service not available. Will generate fallback summaries.');
+        }
+
+        logger.info('Generating initial summaries from recent PRs');
+
+        const { pullRequests } = await githubService.getAllPullRequestsFromStarredRepos({
+            maxRepos: 5,
+            maxPRsPerRepo: 2
+        });
+
+        if (pullRequests.length === 0) {
+            logger.info('No pull requests found for summary generation');
+            return;
+        }
+
+        // Generate summaries for up to 5 recent PRs
+        const recentPRs = pullRequests.slice(0, 5);
+        const summaries = await aiService.generateBatchSummaries(recentPRs);
+
+        summariesStore.push(...summaries);
+        logger.info(`Generated ${summaries.length} initial summaries`);
+    } catch (error) {
+        logger.error('Failed to generate initial summaries:', error);
+    }
+}
 
 export { router as summariesRouter }; 

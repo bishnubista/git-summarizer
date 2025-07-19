@@ -95,12 +95,16 @@ export interface PRSummary {
     isImportant: boolean;
     createdAt: string;
     // Backend-specific fields
-    riskFactors: string[];
-    estimatedReviewTime: number;
-    changeCategories: ChangeCategory[];
-    llmProvider: string;
-    tokenUsage: TokenUsage;
-    confidence: number;
+    riskFactors?: string[];
+    estimatedReviewTime?: number;
+    changeCategories?: ChangeCategory[];
+    // AI-related fields
+    aiProvider?: string;
+    model?: string;
+    reviewPriority?: 'low' | 'medium' | 'high';
+    llmProvider?: string;
+    tokenUsage?: TokenUsage;
+    confidence?: number;
 }
 
 export type ChangeCategory =
