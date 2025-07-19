@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>API Integration Test</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+            background: #1a1a1a;
+            color: white;
+        }
+
+        .test-section {
+            margin: 20px 0;
+            padding: 15px;
+            border: 1px solid #333;
+            border-radius: 8px;
+        }
+
+        .success {
+            background-color: #0d4f3c;
+            border-color: #198754;
+        }
+
+        .error {
+            background-color: #4a1c1c;
+            border-color: #dc3545;
+        }
+
+        .loading {
+            background-color: #1c3d4a;
+            border-color: #0dcaf0;
+        }
+
+        button {
+            background: #0d6efd;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 4px;
+            cursor: pointer;
+            margin: 5px;
+        }
+
+        button:hover {
+            background: #0b5ed7;
+        }
+
+        pre {
+            background: #2d2d2d;
+            padding: 10px;
+            border-radius: 4px;
+            overflow-x: auto;
+            white-space: pre-wrap;
+        }
+    </style>
+</head>
+
+<body>
+    <h1>🚀 AI GitHub PR Summarizer - API Integration Test</h1>
+
+    <div class="test-section">
+        <h2>Backend Health Check</h2>
+        <button onclick="testHealth()">Test Health Endpoint</button>
+        <div id="health-result"></div>
+    </div>
+
+    <div class="test-section">
+        <h2>Repositories API</h2>
+        <button onclick="testRepositories()">Test Repositories</button>
+        <div id="repos-result"></div>
+    </div>
+
+    <div class="test-section">
+        <h2>Pull Requests API</h2>
+        <button onclick="testPullRequests()">Test Pull Requests</button>
+        <div id="prs-result"></div>
+    </div>
+
+    <div class="test-section">
+        <h2>Summaries API</h2>
+        <button onclick="testSummaries()">Test Summaries</button>
+        <div id="summaries-result"></div>
+    </div>
+
+    <div class="test-section">
+        <h2>Mark as Reviewed Test</h2>
+        <button onclick="testMarkReviewed()">Test Mark as Reviewed</button>
+        <div id="reviewed-result"></div>
+    </div>
+
+    <script>
+        const API_BASE_URL = 'http://localhost:3001';
+
+        async function makeRequest(url, options = {}) {
+            try {
+                const response = await fetch(url, {
+                    headers: {
+                        'Content-Type': 'application/json',
+                        ...options.headers,
+                    },
+                    ...options,
+                });
+
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+
+                return await response.json();
+            } catch (error) {
+                throw new Error(`Request failed: ${error.message}`);
+            }
+        }
+
+        function showResult(elementId, data, isError = false) {
+            const element = document.getElementById(elementId);
+            const className = isError ? 'error' : 'success';
+            element.className = `test-section ${className}`;
+
+            if (isError) {
+                element.innerHTML = `<h3>❌ Error</h3><pre>${data}</pre>`;
+            } else {
+                element.innerHTML = `<h3>✅ Success</h3><pre>${JSON.stringify(data, null, 2)}</pre>`;
+            }
+        }
+
+        function showLoading(elementId) {
+            const element = document.getElementById(elementId);
+            element.className = 'test-section loading';
+            element.innerHTML = '<h3>⏳ Loading...</h3>';
+        }
+
+        async function testHealth() {
+            showLoading('health-result');
+            try {
+                const data = await makeRequest(`${API_BASE_URL}/health`);
+                showResult('health-result', data);
+            } catch (error) {
+                showResult('health-result', error.message, true);
+            }
+        }
+
+        async function testRepositories() {
+            showLoading('repos-result');
+            try {
+                const data = await makeRequest(`${API_BASE_URL}/api/repositories`);
+                showResult('repos-result', {
+                    count: data.data?.length || 0,
+                    repositories: data.data?.slice(0, 2) || [], // Show first 2
+                    meta: data.meta
+                });
+            } catch (error) {
+                showResult('repos-result', error.message, true);
+            }
+        }
+
+        async function testPullRequests() {
+            showLoading('prs-result');
+            try {
+                const data = await makeRequest(`${API_BASE_URL}/api/pull-requests`);
+                showResult('prs-result', {
+                    count: data.data?.length || 0,
+                    pullRequests: data.data?.slice(0, 2) || [], // Show first 2
+                    meta: data.meta
+                });
+            } catch (error) {
+                showResult('prs-result', error.message, true);
+            }
+        }
+
+        async function testSummaries() {
+            showLoading('summaries-result');
+            try {
+                const data = await makeRequest(`${API_BASE_URL}/api/summaries`);
+                showResult('summaries-result', {
+                    count: data.data?.length || 0,
+                    summaries: data.data?.slice(0, 1) || [], // Show first 1
+                    meta: data.meta
+                });
+            } catch (error) {
+                showResult('summaries-result', error.message, true);
+            }
+        }
+
+        async function testMarkReviewed() {
+            showLoading('reviewed-result');
+            try {
+                // First get summaries to find an ID
+                const summariesData = await makeRequest(`${API_BASE_URL}/api/summaries`);
+                if (summariesData.data?.length > 0) {
+                    const summaryId = summariesData.data[0].id;
+
+                    // Try to mark as reviewed
+                    const result = await makeRequest(`${API_BASE_URL}/api/summaries/${summaryId}/reviewed`, {
+                        method: 'PATCH'
+                    });
+
+                    showResult('reviewed-result', {
+                        action: 'Mark as reviewed',
+                        summaryId,
+                        result
+                    });
+                } else {
+                    throw new Error('No summaries available to test with');
+                }
+            } catch (error) {
+                showResult('reviewed-result', error.message, true);
+            }
+        }
+
+        // Auto-run health check on page load
+        document.addEventListener('DOMContentLoaded', () => {
+            testHealth();
+        });
+    </script>
+</body>
+
+</html>
